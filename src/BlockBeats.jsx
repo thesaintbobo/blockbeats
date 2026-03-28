@@ -24,7 +24,6 @@ export default function BlockBeats() {
   const [error,        setError]        = useState(null);
   const [sessionTime,  setSessionTime]  = useState(0);
   const [tps,          setTps]          = useState(0);
-  const [blockFlash,   setBlockFlash]   = useState(false);
   const [activityTick, setActivityTick] = useState(0);
   const [theme,        setTheme]        = useState("dark");
 
@@ -143,8 +142,7 @@ export default function BlockBeats() {
         }
       } catch (e) {}
     }, 250);
-    setBlockFlash(true); setTimeout(() => setBlockFlash(false), 60);
-    setChordName(ctx.chordName);
+setChordName(ctx.chordName);
     setActiveVoices(ctx.activeVoices);
     setActiveBlock(block);
     setTps(Math.round(block.txCount / 0.4));
@@ -197,8 +195,7 @@ export default function BlockBeats() {
 
   return (
     <div style={{ minHeight:"100vh", background:T.bg, color:T.text, fontFamily:"'Space Mono','JetBrains Mono',monospace" }}>
-      <BackgroundCanvas analyserRef={analyserRef} fftAnalyserRef={fftAnalyserRef} isPlaying={isPlaying} color={ACCENT} canvasFade={T.canvasFade} />
-      <div style={{ position:"fixed", inset:0, zIndex:2, pointerEvents:"none", background:"rgba(255,228,160,0.04)", opacity:blockFlash?1:0, transition:blockFlash?"none":"opacity 1.2s ease-out" }} />
+      <BackgroundCanvas analyserRef={analyserRef} fftAnalyserRef={fftAnalyserRef} isPlaying={isPlaying} color={ACCENT} T={T} />
 
       {/* SPLASH */}
       {!isPlaying && (

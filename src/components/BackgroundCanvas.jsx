@@ -1,6 +1,6 @@
 import { useRef, useEffect } from "react";
 
-export default function BackgroundCanvas({ analyserRef, fftAnalyserRef, isPlaying, color, canvasFade }) {
+export default function BackgroundCanvas({ analyserRef, fftAnalyserRef, isPlaying, color, T }) {
   const canvasRef = useRef(null);
   const animRef   = useRef(null);
 
@@ -18,77 +18,85 @@ export default function BackgroundCanvas({ analyserRef, fftAnalyserRef, isPlayin
     const draw = () => {
       animRef.current = requestAnimationFrame(draw);
       const W = canvas.width, H = canvas.height;
-      ctx.fillStyle = canvasFade;
-      ctx.fillRect(0, 0, W, H);
+
+      // clear
+      ctx.clearRect(0, 0, W, H);
 
       if (!analyserRef.current || !isPlaying) {
         // idle: subtle drifting sine
         ctx.beginPath();
         const t = Date.now() / 1000;
         for (let x = 0; x < W; x++) {
-          const y = H / 2 + Math.sin(x / 80 + t * 1.5) * 14 + Math.sin(x / 200 + t * 0.6) * 6;
+          const y = H / 2 + Math.sin(x / 30 + t * 1.4) * H * 0.12 + Math.sin(x / 70 + t * 0.6) * H * 0.06;
           x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
         }
-        ctx.strokeStyle = color + "22";
-        ctx.lineWidth = 1.5 * devicePixelRatio;
+        ctx.strokeStyle = color + "33";
+        ctx.lineWidth   = 1 * devicePixelRatio;
         ctx.shadowColor = color;
-        ctx.shadowBlur = 8;
+        ctx.shadowBlur  = 6;
         ctx.stroke();
-        ctx.shadowBlur = 0;
+        ctx.shadowBlur  = 0;
         return;
       }
 
       const wave = analyserRef.current.getValue(), n = wave.length, sw = W / n;
 
-      // ── sharp oscilloscope line ──────────────────────────────────────────────
+      // soft halo
       ctx.beginPath();
       for (let i = 0; i < n; i++) {
         const y = (wave[i] * 0.5 + 0.5) * H;
         i === 0 ? ctx.moveTo(i * sw, y) : ctx.lineTo(i * sw, y);
       }
-      // outer soft halo
-      ctx.strokeStyle = color + "33";
-      ctx.lineWidth   = 6 * devicePixelRatio;
+      ctx.strokeStyle = color + "22";
+      ctx.lineWidth   = 5 * devicePixelRatio;
       ctx.shadowColor = color;
-      ctx.shadowBlur  = 28;
+      ctx.shadowBlur  = 14;
       ctx.stroke();
-      // crisp bright core line
+
+      // crisp core
       ctx.beginPath();
       for (let i = 0; i < n; i++) {
         const y = (wave[i] * 0.5 + 0.5) * H;
         i === 0 ? ctx.moveTo(i * sw, y) : ctx.lineTo(i * sw, y);
       }
-      ctx.strokeStyle = color + "ee";
-      ctx.lineWidth   = 1.5 * devicePixelRatio;
+      ctx.strokeStyle = color + "dd";
+      ctx.lineWidth   = 1.2 * devicePixelRatio;
       ctx.shadowColor = color;
-      ctx.shadowBlur  = 18;
+      ctx.shadowBlur  = 10;
       ctx.stroke();
       ctx.shadowBlur  = 0;
-
-      // ── FFT bars along bottom ────────────────────────────────────────────────
-      if (fftAnalyserRef.current) {
-        try {
-          const fft = fftAnalyserRef.current.getValue(), bw = W / fft.length;
-          for (let i = 0; i < fft.length; i++) {
-            const norm = Math.max(0, (fft[i] + 80) / 80);
-            const barH = norm * H * 0.10;
-            ctx.fillStyle = color + Math.round(norm * 0x44).toString(16).padStart(2, "0");
-            ctx.fillRect(i * bw, H - barH, Math.max(1, bw - 1), barH);
-          }
-        } catch (e) {}
-      }
     };
 
     draw();
     return () => { cancelAnimationFrame(animRef.current); ro.disconnect(); };
-  }, [isPlaying, color, canvasFade]);
+  }, [isPlaying, color]);
 
   return (
-    <canvas ref={canvasRef} style={{
-      position: "fixed", top: 0, left: 0,
-      width: "100%", height: "100%",
-      zIndex: 4, pointerEvents: "none",
-      mixBlendMode: "screen",
-    }} />
+    <div style={{
+      position: "fixed", bottom: 54, right: 20, zIndex: 10,
+      width: 220, height: 72,
+      border: `1px solid ${color}28`,
+      borderRadius: 6,
+      background: "rgba(8,8,12,0.72)",
+      backdropFilter: "blur(8px)",
+      overflow: "hidden",
+      pointerEvents: "none",
+    }}>
+      {/* label */}
+      <div style={{
+        position: "absolute", top: 5, left: 8,
+        fontFamily: "monospace", fontSize: 7, letterSpacing: 1.5,
+        color: color + "55", pointerEvents: "none", userSelect: "none",
+      }}>
+        OSC
+      </div>
+      {/* scanline overlay */}
+      <div style={{
+        position: "absolute", inset: 0,
+        backgroundImage: "repeating-linear-gradient(to bottom, transparent, transparent 2px, rgba(0,0,0,0.08) 2px, rgba(0,0,0,0.08) 4px)",
+        pointerEvents: "none",
+      }} />
+      <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block" }} />
+    </div>
   );
 }
