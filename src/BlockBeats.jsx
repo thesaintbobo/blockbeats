@@ -286,36 +286,29 @@ export default function BlockBeats() {
             display={`${volume}%`} T={T} />
         </div>
 
-        {/* CURRENT BLOCK */}
+        {/* CURRENT BLOCK — slim strip */}
         {activeBlock && (
-          <div style={{ ...glass, padding:"14px 24px", borderBottom:`1px solid ${T.divider}` }}>
-            <div style={lbl}>CONDUCTING BLOCK</div>
-            <div style={{ marginTop:8, display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))", gap:8 }}>
-              {[
-                { label:"SLOT",         value:`#${activeBlock.slot.toLocaleString()}` },
-                { label:"TRANSACTIONS", value:activeBlock.txCount.toLocaleString()    },
-                { label:"FEES (SOL)",   value:activeBlock.fees.toFixed(4)             },
-                { label:"PROGRAMS",     value:activeBlock.programs.toLocaleString()   },
-                { label:"HASH",         value:activeBlock.hash.slice(0,16)+"…"        },
-                { label:"RECEIVED",     value:timeAgo(activeBlock.time)               },
-              ].map(item => (
-                <div key={item.label} style={{ padding:"8px 10px", borderRadius:5, background:T.cardBg, border:`1px solid ${T.cardBorder}` }}>
-                  <div style={{ fontSize:8, color:T.muted4, letterSpacing:1.5, marginBottom:4 }}>{item.label}</div>
-                  <div style={{ fontSize:12, fontWeight:600, color:T.subtext }}>{item.value}</div>
-                </div>
-              ))}
+          <div style={{ ...glass, padding:"10px 24px", borderBottom:`1px solid ${T.divider}` }}>
+            <div style={{ display:"flex", alignItems:"baseline", gap:16, flexWrap:"wrap" }}>
+              <span style={{ fontFamily:"monospace", fontSize:9, color:T.muted3, letterSpacing:2 }}>BLOCK</span>
+              <span style={{ fontFamily:"monospace", fontSize:14, fontWeight:700, color:T.val }}>#{activeBlock.slot.toLocaleString()}</span>
+              <span style={{ fontFamily:"monospace", fontSize:11, color:T.muted2 }}>{activeBlock.txCount.toLocaleString()} TXS</span>
+              <span style={{ fontFamily:"monospace", fontSize:11, color:T.muted2 }}>{activeBlock.fees.toFixed(4)} SOL</span>
+              <span style={{ fontFamily:"monospace", fontSize:11, color:T.muted2 }}>{activeBlock.programs} PROGRAMS</span>
+              <span style={{ fontFamily:"monospace", fontSize:9, color:T.muted4 }}>{activeBlock.hash.slice(0,14)}…</span>
+              <span style={{ fontFamily:"monospace", fontSize:9, color:T.muted4 }}>{timeAgo(activeBlock.time)}</span>
             </div>
-            <div style={{ marginTop:8, fontSize:9, color:T.footnote, lineHeight:1.8 }}>
-              KEY: {keyLabel} (rotates daily) &nbsp;|&nbsp; HASH → chord {chordName} &nbsp;|&nbsp; TX COUNT → chord density &nbsp;|&nbsp; PROGRAMS → voices ({activeVoices}/6) &nbsp;|&nbsp; FEES → filter
+            <div style={{ marginTop:5, fontSize:8, color:T.footnote, letterSpacing:0.5 }}>
+              HASH → chord {chordName} &nbsp;·&nbsp; TX COUNT → density &nbsp;·&nbsp; FEES → filter &nbsp;·&nbsp; PROGRAMS → voices ({activeVoices}/6)
             </div>
           </div>
         )}
 
         {/* BLOCK HISTORY */}
         {blocks.length > 0 && (
-          <div style={{ ...glass, padding:"12px 24px", flex:1 }}>
-            <div style={{ ...lbl, marginBottom:8 }}>BLOCK HISTORY</div>
-            <BlockTicker blocks={blocks} T={T} />
+          <div style={{ ...glass, padding:"16px 24px 20px", flex:1 }}>
+            <div style={{ ...lbl, marginBottom:12 }}>BLOCK HISTORY — TX COUNT</div>
+            <BlockTicker blocks={blocks} T={T} accent={ACCENT} />
           </div>
         )}
 
