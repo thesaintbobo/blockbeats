@@ -2,7 +2,8 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import * as Tone from "tone";
 
 import THEMES from "./theme.js";
-import { BPM, SIG, VERSION, DAILY_KEY } from "./constants.js";
+import { BPM, SIG, VERSION } from "./constants.js";
+import { DAILY_KEY } from "./constants.js";
 import { nextMelodicNote, fetchRealBlock, generateFakeBlock, blockToContext } from "./music.js";
 import { formatTime, timeAgo } from "./utils.js";
 import BackgroundCanvas from "./components/BackgroundCanvas.jsx";
@@ -15,53 +16,50 @@ export default function BlockBeats() {
   const [isPlaying,    setIsPlaying]    = useState(false);
   const [blocks,       setBlocks]       = useState([]);
   const [activeBlock,  setActiveBlock]  = useState(null);
-  const [chordName,    setChordName]    = useState("i");
+  const [chordName,    setChordName]    = useState("i7");
   const [activeVoices, setActiveVoices] = useState(0);
   const [volume,       setVolume]       = useState(75);
-  const [reverbWet,    setReverbWet]    = useState(0.5);
+  const [reverbWet,    setReverbWet]    = useState(0.62);
   const [stats,        setStats]        = useState({ blocks:0, tx:0, fees:0 });
   const [rpcStatus,    setRpcStatus]    = useState("idle");
   const [error,        setError]        = useState(null);
   const [sessionTime,  setSessionTime]  = useState(0);
   const [tps,          setTps]          = useState(0);
-  const [activityTick, setActivityTick] = useState(0);
   const [theme,        setTheme]        = useState("dark");
 
   const T      = THEMES[theme];
   const ACCENT = T.accent;
 
-  // synth refs
-  const pnoRef  = useRef(null);
-  const v1Ref   = useRef(null);
-  const celRef  = useRef(null);
-  const bassRef = useRef(null);
-  const fltRef  = useRef(null);
-  const hrnRef  = useRef(null);
-  const timpRef = useRef(null);
+  // ── synth refs ─────────────────────────────────────────────────────────────
+  const pnoMelRef = useRef(null);   // piano melody (monophonic, lead)
+  const pnoRef    = useRef(null);   // piano chord pad (polyphonic, soft)
+  const v1Ref     = useRef(null);   // strings (polyphonic pad)
+  const celRef    = useRef(null);   // cello (countermelody)
+  const bassRef   = useRef(null);   // double bass
+  const fltRef    = useRef(null);   // flute
+  const hrnRef    = useRef(null);   // horn
+  const timpRef   = useRef(null);   // timpani
+  const cltRef    = useRef(null);   // celeste (bell sparkle)
 
-  const melStatesRef    = useRef({ pno:{d:2,o:4}, v1:{d:4,o:4}, cel:{d:2,o:3}, bass:{d:0,o:2}, flt:{d:0,o:5} });
-  const chordTonesRef   = useRef([0,3,7]);
-  const pnoChordRef     = useRef([]);
+  const melStatesRef    = useRef({ pnoMel:{d:2,o:4}, cel:{d:2,o:3}, bass:{d:0,o:2}, flt:{d:0,o:5} });
+  const chordTonesRef   = useRef([0,3,7,10]);
+  const openChordRef    = useRef([]);         // open-voiced chord array for pno + strings
   const pnoChordProbRef = useRef(0.5);
+  const phraseBarRef    = useRef(0);          // 0-3 position within 4-bar phrase
+
   const analyserRef     = useRef(null);
   const fftAnalyserRef  = useRef(null);
-  const reverbRef       = useRef(null);
-  const filterRef       = useRef(null);
-  const instrActivity   = useRef({});
+  const reverbLushRef   = useRef(null);
+  const filterMainRef   = useRef(null);
   const isPlayingRef    = useRef(false);
   const intervalRef     = useRef(null);
+  const instrActivity   = useRef({});
 
   const keyLabel = `${DAILY_KEY.root} ${DAILY_KEY.mode.toUpperCase()}`;
 
   useEffect(() => {
     if (!isPlaying) return;
     const t = setInterval(() => setSessionTime(s => s + 1), 1000);
-    return () => clearInterval(t);
-  }, [isPlaying]);
-
-  useEffect(() => {
-    if (!isPlaying) return;
-    const t = setInterval(() => setActivityTick(n => n + 1), 100);
     return () => clearInterval(t);
   }, [isPlaying]);
 
@@ -77,85 +75,238 @@ export default function BlockBeats() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // ── melodic play helper ────────────────────────────────────────────────────
   function melodicPlay(key, synth, dur, time, style, minOct, maxOct) {
     if (!synth) return;
-    const next = nextMelodicNote(melStatesRef.current[key], chordTonesRef.current, minOct, maxOct, style);
+    const next = nextMelodicNote(
+      melStatesRef.current[key],
+      chordTonesRef.current,
+      minOct, maxOct, style,
+      phraseBarRef.current
+    );
     melStatesRef.current[key] = { d: next.d, o: next.o };
-    try { synth.triggerAttackRelease(next.note, dur, time); instrActivity.current[key] = Date.now(); } catch (e) {}
+    try {
+      synth.triggerAttackRelease(next.note, dur, time);
+      instrActivity.current[key] = Date.now();
+    } catch (e) {}
+
+    // celeste sparkle: when piano melody hits oct 5+, add a bell shimmer 2 octaves up
+    if (key === "pnoMel" && next.o >= 5 && Math.random() < 0.38 && cltRef.current) {
+      const sparkleNote = next.note.replace(/(\d+)$/, n => String(parseInt(n) + 2));
+      try {
+        cltRef.current.triggerAttackRelease(sparkleNote, "8n", time + 0.05);
+        instrActivity.current.clt = Date.now();
+      } catch (e) {}
+    }
   }
 
+  // ── audio setup ───────────────────────────────────────────────────────────
   const setupAudio = useCallback(async () => {
     await Tone.start();
-    const reverb  = new Tone.Reverb({ decay:5.0, wet:0.5, preDelay:0.025 });
-    await reverb.generate();
-    const filter  = new Tone.Filter({ frequency:2800, type:"lowpass", rolloff:-12 });
-    const chorus  = new Tone.Chorus({ frequency:2.0, delayTime:2.8, depth:0.3, spread:180 });
+
+    // ── effects ─────────────────────────────────────────────────────────────
+    const reverbLush  = new Tone.Reverb({ decay:8.0, wet:0.62, preDelay:0.04 });
+    const reverbShort = new Tone.Reverb({ decay:2.5, wet:0.25, preDelay:0.01 });
+    await Promise.all([reverbLush.generate(), reverbShort.generate()]);
+
+    const pingPong   = new Tone.PingPongDelay("8n", 0.18);  pingPong.wet.value = 0.16;
+    const filterMain = new Tone.Filter({ frequency:3200, type:"lowpass", rolloff:-12 });
+    const filterBass = new Tone.Filter({ frequency:380,  type:"lowpass", rolloff:-24 });
+    const chorus     = new Tone.Chorus({ frequency:1.2, delayTime:3.5, depth:0.22, spread:180 });
     chorus.start();
-    const vibrato = new Tone.Vibrato({ frequency:5.2, depth:0.04 });
-    const waveAn  = new Tone.Analyser("waveform", 2048);
-    const fftAn   = new Tone.Analyser("fft", 64);
+    const vibrato    = new Tone.Vibrato({ frequency:4.5, depth:0.03 });
 
-    chorus.connect(filter); vibrato.connect(chorus); filter.connect(reverb);
-    reverb.connect(waveAn); waveAn.connect(fftAn); fftAn.connect(Tone.getDestination());
-    Tone.getDestination().volume.value = -40 + (75 / 100) * 40;
+    const waveAn = new Tone.Analyser("waveform", 2048);
+    const fftAn  = new Tone.Analyser("fft", 64);
 
-    const toStrings = s => { s.connect(vibrato); return s; };
-    const toDirect  = s => { s.connect(filter);  return s; };
+    // ── routing ─────────────────────────────────────────────────────────────
+    //   filterMain → reverbLush → waveAn → fftAn → dest
+    filterMain.connect(reverbLush);
+    reverbLush.connect(waveAn);
+    waveAn.connect(fftAn);
+    fftAn.connect(Tone.getDestination());
+    //   reverbShort → dest (separate path for bass/timp)
+    reverbShort.connect(Tone.getDestination());
 
-    pnoRef.current  = toDirect(new Tone.PolySynth(Tone.Synth, { oscillator:{type:"triangle"}, envelope:{attack:0.006,decay:0.9,sustain:0.12,release:2.5}, volume:-8 }));
-    v1Ref.current   = toStrings(new Tone.Synth({ oscillator:{type:"fatsawtooth",count:3,spread:20}, envelope:{attack:0.22,decay:0.15,sustain:0.80,release:3.2}, volume:-18 }));
-    celRef.current  = toStrings(new Tone.Synth({ oscillator:{type:"fatsawtooth",count:2,spread:12}, envelope:{attack:0.32,decay:0.20,sustain:0.78,release:3.8}, volume:-14 }));
-    bassRef.current = toStrings(new Tone.Synth({ oscillator:{type:"triangle"}, envelope:{attack:0.5,decay:0.35,sustain:0.75,release:4.5}, volume:-10 }));
-    fltRef.current  = toDirect(new Tone.Synth({ oscillator:{type:"sine"}, envelope:{attack:0.07,decay:0.12,sustain:0.70,release:1.2}, volume:-22 }));
-    hrnRef.current  = toDirect(new Tone.AMSynth({ oscillator:{type:"triangle"}, envelope:{attack:0.8,decay:0.5,sustain:0.65,release:4.0}, modulation:{type:"sine"}, modulationEnvelope:{attack:1.0,decay:0.4,sustain:0.5,release:3.0}, harmonicity:0.5, volume:-17 }));
-    timpRef.current = toDirect(new Tone.MembraneSynth({ pitchDecay:0.05, octaves:5, envelope:{attack:0.001,decay:0.7,sustain:0.01,release:2.2}, volume:-14 }));
+    Tone.getDestination().volume.value = -40 + (volume / 100) * 40;
 
-    reverbRef.current = reverb; filterRef.current = filter;
-    analyserRef.current = waveAn; fftAnalyserRef.current = fftAn;
-    melStatesRef.current = { pno:{d:2,o:4}, v1:{d:4,o:4}, cel:{d:2,o:3}, bass:{d:0,o:2}, flt:{d:0,o:5} };
+    // ── synths ──────────────────────────────────────────────────────────────
+    // Piano melody — lead, triangle, ping-pong shimmer
+    pnoMelRef.current = new Tone.Synth({
+      oscillator: { type:"triangle" },
+      envelope:   { attack:0.008, decay:0.7, sustain:0.18, release:3.2 },
+      volume: -5,
+    });
+    pnoMelRef.current.connect(pingPong);
+    pingPong.connect(filterMain);
+
+    // Piano chords — soft sine pad
+    pnoRef.current = new Tone.PolySynth(Tone.Synth, {
+      oscillator: { type:"sine" },
+      envelope:   { attack:0.08, decay:1.4, sustain:0.06, release:4.5 },
+      volume: -16,
+    });
+    pnoRef.current.connect(filterMain);
+
+    // Strings — warm polyphonic pad (chord wash, not melody)
+    v1Ref.current = new Tone.PolySynth(Tone.Synth, {
+      oscillator: { type:"fatsawtooth", count:3, spread:18 },
+      envelope:   { attack:0.45, decay:0.1, sustain:0.92, release:5.5 },
+      volume: -18,
+    });
+    v1Ref.current.connect(vibrato);
+    vibrato.connect(filterMain);
+
+    // Cello — melodic countermelody
+    celRef.current = new Tone.Synth({
+      oscillator: { type:"fatsawtooth", count:2, spread:10 },
+      envelope:   { attack:0.35, decay:0.15, sustain:0.84, release:5.0 },
+      volume: -13,
+    });
+    celRef.current.connect(filterMain);
+
+    // Double bass — clean tonal foundation, dedicated lowpass
+    bassRef.current = new Tone.Synth({
+      oscillator: { type:"triangle" },
+      envelope:   { attack:0.08, decay:0.4, sustain:0.80, release:5.5 },
+      volume: -9,
+    });
+    bassRef.current.connect(filterBass);
+    filterBass.connect(reverbShort);
+
+    // Flute — bright runs
+    fltRef.current = new Tone.Synth({
+      oscillator: { type:"sine" },
+      envelope:   { attack:0.04, decay:0.08, sustain:0.75, release:2.0 },
+      volume: -17,
+    });
+    fltRef.current.connect(chorus);
+    chorus.connect(filterMain);
+
+    // Horn — AMSynth swell
+    hrnRef.current = new Tone.AMSynth({
+      oscillator:           { type:"triangle" },
+      envelope:             { attack:1.2, decay:0.6, sustain:0.70, release:5.5 },
+      modulation:           { type:"sine" },
+      modulationEnvelope:   { attack:1.5, decay:0.5, sustain:0.5, release:4.0 },
+      harmonicity: 0.75,
+      volume: -15,
+    });
+    hrnRef.current.connect(filterMain);
+
+    // Timpani — percussive block marker
+    timpRef.current = new Tone.MembraneSynth({
+      pitchDecay: 0.08, octaves: 5,
+      envelope:   { attack:0.001, decay:0.7, sustain:0.01, release:2.2 },
+      volume: -14,
+    });
+    timpRef.current.connect(reverbShort);
+
+    // Celeste — bell sparkle (bypass filter for bright shimmer)
+    cltRef.current = new Tone.PolySynth(Tone.Synth, {
+      oscillator: { type:"sine" },
+      envelope:   { attack:0.001, decay:1.1, sustain:0.0, release:2.8 },
+      volume: -22,
+    });
+    cltRef.current.connect(reverbLush);
+
+    reverbLushRef.current  = reverbLush;
+    filterMainRef.current  = filterMain;
+    analyserRef.current    = waveAn;
+    fftAnalyserRef.current = fftAn;
+
+    melStatesRef.current = { pnoMel:{d:2,o:4}, cel:{d:2,o:3}, bass:{d:0,o:2}, flt:{d:0,o:5} };
+    phraseBarRef.current = 0;
 
     Tone.Transport.timeSignature = SIG;
     Tone.Transport.bpm.value     = BPM;
 
-    const pno = pnoRef, v1 = v1Ref, cel = celRef, bass = bassRef, flt = fltRef;
-    Tone.Transport.scheduleRepeat(t => { if (Math.random() > 0.6) return; melodicPlay("pno", pno.current, "2n", t, "lyrical", 4, 5); }, "2n");
-    Tone.Transport.scheduleRepeat(t => { if (Math.random() > pnoChordProbRef.current) return; const chord = pnoChordRef.current; if (!chord?.length || !pno.current) return; try { pno.current.triggerAttackRelease(chord, "2n.", t); instrActivity.current.pno = Date.now(); } catch (e) {} }, "1m");
-    Tone.Transport.scheduleRepeat(t => { melodicPlay("v1",   v1.current,   "2n.",  t, "inner",   3, 4); }, "2n", "4n");
-    Tone.Transport.scheduleRepeat(t => { melodicPlay("cel",  cel.current,  "1m",   t, "inner",   2, 3); }, "1m", "8n");
-    Tone.Transport.scheduleRepeat(t => { melodicPlay("bass", bass.current, "1m.",  t, "bass",    1, 2); }, "1m");
-    Tone.Transport.scheduleRepeat(t => { if (Math.random() > 0.3) return; melodicPlay("flt", flt.current, "8n", t, "lyrical", 5, 6); }, "4n", "1m");
-    Tone.Transport.start();
-  }, []);
+    // ── scheduling ──────────────────────────────────────────────────────────
 
+    // Phrase bar counter (0-3): advances every measure
+    Tone.Transport.scheduleRepeat(() => {
+      phraseBarRef.current = (phraseBarRef.current + 1) % 4;
+    }, "1m");
+
+    // Piano melody — shaped by phrase position (rise → peak → taper → breathe)
+    Tone.Transport.scheduleRepeat(t => {
+      const prob = [0.65, 0.82, 0.50, 0.12][phraseBarRef.current];
+      if (Math.random() > prob) return;
+      melodicPlay("pnoMel", pnoMelRef.current, "4n.", t, "lyrical", 4, 5);
+    }, "4n");
+
+    // Piano chord pad — every 2 bars, offset by 1 bar (dialogue with strings)
+    Tone.Transport.scheduleRepeat(t => {
+      if (Math.random() > pnoChordProbRef.current) return;
+      if (!pnoRef.current || !openChordRef.current?.length) return;
+      try { pnoRef.current.triggerAttackRelease(openChordRef.current, "2m", t); instrActivity.current.pno = Date.now(); } catch(e) {}
+    }, "2m", "1m");
+
+    // Strings pad — every 2 bars, long duration overlaps into next phrase (legato wash)
+    Tone.Transport.scheduleRepeat(t => {
+      if (Math.random() > 0.85 || !v1Ref.current || !openChordRef.current?.length) return;
+      try { v1Ref.current.triggerAttackRelease(openChordRef.current, "2m.", t); instrActivity.current.v1 = Date.now(); } catch(e) {}
+    }, "2m");
+
+    // Cello — countermelody on bar 2 of each 2-bar group (dialogue with strings)
+    Tone.Transport.scheduleRepeat(t => {
+      melodicPlay("cel", celRef.current, "1m", t, "inner", 2, 3);
+    }, "2m", "1m");
+
+    // Bass — every measure, grounding tonal center
+    Tone.Transport.scheduleRepeat(t => {
+      melodicPlay("bass", bassRef.current, "1m.", t, "bass", 1, 2);
+    }, "1m");
+
+    // Flute — phrase bars 0-1: active (55%), bars 2-3: sparse (15%)
+    Tone.Transport.scheduleRepeat(t => {
+      const prob = phraseBarRef.current <= 1 ? 0.55 : 0.15;
+      if (Math.random() > prob) return;
+      melodicPlay("flt", fltRef.current, "4n", t, "lyrical", 5, 6);
+    }, "2n", "2n");
+
+    Tone.Transport.start();
+  }, [volume]);
+
+  // ── conduct block ─────────────────────────────────────────────────────────
   const conductBlock = useCallback((block) => {
     const ctx = blockToContext(block);
     chordTonesRef.current   = ctx.chordTones;
-    pnoChordRef.current     = ctx.chordVoicing;
+    openChordRef.current    = ctx.chordVoicing;
     pnoChordProbRef.current = ctx.chordDensity;
-    filterRef.current?.frequency.rampTo(ctx.filterFreq, 3.5);
-    try { if (timpRef.current) { timpRef.current.triggerAttackRelease(ctx.timpani, "4n"); instrActivity.current.timp = Date.now(); } } catch (e) {}
-    setTimeout(() => {
-      try {
-        if (hrnRef.current) {
-          hrnRef.current.triggerAttackRelease(ctx.hornNote, "1n"); instrActivity.current.hrn = Date.now();
-          setTimeout(() => { try { hrnRef.current?.triggerAttackRelease(ctx.hornFifth, "1n"); } catch (e) {} }, 600);
-        }
-      } catch (e) {}
-    }, 250);
-setChordName(ctx.chordName);
+    filterMainRef.current?.frequency.rampTo(ctx.filterFreq, 1.2);
+
+    // Timpani always marks new block
+    try { if (timpRef.current) { timpRef.current.triggerAttackRelease(ctx.timpani, "4n"); instrActivity.current.timp = Date.now(); } } catch(e) {}
+
+    // Horn swell: only on high-fee blocks or the very first block
+    if (ctx.fees > 0.8 || stats.blocks === 0) {
+      setTimeout(() => {
+        try {
+          if (hrnRef.current) {
+            hrnRef.current.triggerAttackRelease(ctx.hornNote, "2n"); instrActivity.current.hrn = Date.now();
+            setTimeout(() => { try { hrnRef.current?.triggerAttackRelease(ctx.hornFifth, "2n"); } catch(e) {} }, 1400);
+          }
+        } catch(e) {}
+      }, 300);
+    }
+
+    setChordName(ctx.chordName);
     setActiveVoices(ctx.activeVoices);
     setActiveBlock(block);
     setTps(Math.round(block.txCount / 0.4));
     setStats(prev => ({ blocks: prev.blocks + 1, tx: prev.tx + block.txCount, fees: prev.fees + block.fees }));
-  }, []);
+  }, [stats.blocks]);
 
+  // ── stop / start ──────────────────────────────────────────────────────────
   const stopPlaying = useCallback(() => {
     isPlayingRef.current = false;
     setIsPlaying(false); setRpcStatus("idle");
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
     Tone.Transport.stop(); Tone.Transport.cancel();
-    [pnoRef, v1Ref, celRef, bassRef, fltRef, hrnRef, timpRef, analyserRef, fftAnalyserRef, reverbRef, filterRef].forEach(r => {
-      if (r.current) { try { r.current.dispose(); } catch (e) {} r.current = null; }
+    [pnoMelRef, pnoRef, v1Ref, celRef, bassRef, fltRef, hrnRef, timpRef, cltRef,
+     analyserRef, fftAnalyserRef, reverbLushRef, filterMainRef].forEach(r => {
+      if (r.current) { try { r.current.dispose(); } catch(e) {} r.current = null; }
     });
     setActiveVoices(0);
   }, []);
@@ -182,8 +333,8 @@ setChordName(ctx.chordName);
 
   const handleShare = () => {
     const text = activeBlock
-      ? `Solana as a waltz — ${keyLabel}, chord ${chordName}, slot #${activeBlock.slot.toLocaleString()}, ${tps.toLocaleString()} TPS. Every block conducts the harmony.`
-      : `Every Solana block conducts a live orchestral waltz in ${keyLabel}. Generative music from the blockchain.`;
+      ? `Solana as an anime OST — ${keyLabel}, chord ${chordName}, slot #${activeBlock.slot.toLocaleString()}, ${tps.toLocaleString()} TPS. Every block conducts the harmony.`
+      : `Every Solana block conducts a live orchestral anime OST in ${keyLabel}. Generative music from the blockchain.`;
     window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(window.location.href)}`, "_blank");
   };
 
@@ -206,7 +357,7 @@ setChordName(ctx.chordName);
             </button>
             <div style={{ fontSize:22, fontWeight:800, letterSpacing:4 }}>BLOCK<span style={{ color:ACCENT }}>BEATS</span></div>
             <div style={{ fontSize:9, color:T.muted3, marginTop:6, letterSpacing:2 }}>TODAY'S KEY: <span style={{ color:ACCENT }}>{keyLabel}</span></div>
-            <div style={{ fontSize:9, color:T.muted4, marginTop:4, letterSpacing:2 }}>A CONTINUOUS ORCHESTRAL WALTZ CONDUCTED BY SOLANA</div>
+            <div style={{ fontSize:9, color:T.muted4, marginTop:4, letterSpacing:2 }}>A LIVE ORCHESTRAL ANIME OST CONDUCTED BY SOLANA</div>
             <div style={{ fontSize:8, color:T.muted5, marginTop:6, letterSpacing:1 }}>PRESS SPACE OR CLICK TO BEGIN</div>
             <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:5, marginTop:16, opacity:0.45 }}>
               <SolanaLogo size={11} />
@@ -269,14 +420,14 @@ setChordName(ctx.chordName);
         {isPlaying && (
           <div style={{ ...glass, padding:"14px 24px", borderBottom:`1px solid ${T.divider}` }}>
             <div style={{ ...lbl, marginBottom:10 }}>ORCHESTRA</div>
-            <OrchestraViz activeVoices={activeVoices} activityRef={instrActivity} tick={activityTick} T={T} />
+            <OrchestraViz activeVoices={activeVoices} activityRef={instrActivity} tick={0} T={T} />
           </div>
         )}
 
         {/* CONTROLS */}
         <div style={{ ...glass, padding:"14px 24px", borderBottom:`1px solid ${T.divider}`, display:"flex", gap:20, flexWrap:"wrap", alignItems:"flex-start" }}>
           <Slider label="REVERB" value={reverbWet} min={0} max={1} step={0.01}
-            onChange={v => { setReverbWet(v); if (reverbRef.current) reverbRef.current.wet.rampTo(v, 0.2); }}
+            onChange={v => { setReverbWet(v); if (reverbLushRef.current) reverbLushRef.current.wet.rampTo(v, 0.2); }}
             display={`${Math.round(reverbWet * 100)}%`} T={T} />
           <Slider label="VOLUME" value={volume} min={0} max={100} step={1}
             onChange={v => { setVolume(v); Tone.getDestination().volume.rampTo(-40 + (v / 100) * 40, 0.05); }}
@@ -296,7 +447,7 @@ setChordName(ctx.chordName);
               <span style={{ fontFamily:"monospace", fontSize:9, color:T.muted4 }}>{timeAgo(activeBlock.time)}</span>
             </div>
             <div style={{ marginTop:5, fontSize:8, color:T.footnote, letterSpacing:0.5 }}>
-              HASH → chord {chordName} &nbsp;·&nbsp; TX COUNT → density &nbsp;·&nbsp; FEES → filter &nbsp;·&nbsp; PROGRAMS → voices ({activeVoices}/6)
+              HASH → chord {chordName} &nbsp;·&nbsp; TX COUNT → density &nbsp;·&nbsp; FEES → filter &amp; horn &nbsp;·&nbsp; PROGRAMS → voices ({activeVoices}/6)
             </div>
           </div>
         )}
@@ -311,7 +462,7 @@ setChordName(ctx.chordName);
 
         {/* FOOTER */}
         <div style={{ ...glass, padding:"10px 24px", borderTop:`1px solid ${T.divider}`, fontSize:9, color:T.muted5, display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 }}>
-          <span>BLOCKBEATS {VERSION} · {keyLabel} · CIRCLE OF FIFTHS · {BPM} BPM WALTZ</span>
+          <span>BLOCKBEATS {VERSION} · {keyLabel} · CIRCLE OF FIFTHS · {BPM} BPM ANIME OST</span>
           <div style={{ display:"flex", alignItems:"center", gap:12 }}>
             <a href="https://github.com/thesaintbobo/blockbeats" target="_blank" rel="noopener noreferrer" style={link}
                onMouseOver={e=>e.target.style.color=ACCENT} onMouseOut={e=>e.target.style.color=T.muted5}>GITHUB</a>
